@@ -3,6 +3,7 @@
 #ifndef FILE
 #define FILE
 
+/// Cannot be greater than 230
 #define DATA_SECTOR_SIZE 230
 #define DATA_SECTORS_MAX 130
 #define DATA_HEAD 0x88
@@ -30,5 +31,7 @@ bool readFile();
 bool writeDefaultFile();
 void readWriteTest();
 void printHeader(FileHeader header);
+bool writeSector(byte *data, uint16_t dataSize, byte sector);
+void initFileReceiver(uint32_t checksum, byte sectorCount, uint16_t dataSize);
 
 #endif

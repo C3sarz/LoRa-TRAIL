@@ -1,26 +1,58 @@
 #include <Arduino.h>
 #include "storage_manager.h"
+#include "conf.h"
 
-enum TX_OPCODE{
-  OPCODE_START = 0x11,
+enum TX_OPCODE {
+  OPCODE_HANDSHAKE = 0x10,
   OPCODE_SEND,
-  OPCODE_END,
-  OPCODE_REPEAT,
   OPCODE_HEARTBEAT,
   OPCODE_LINK,
+  OPCODE_ERROR,
 };
 
-struct TX_HEADER {
-  TX_OPCODE opcode;
-  uint32_t txID;
+class TX_HEADER {
+  const byte SYNCWORD = 0x88;
+protected:
+  byte opcode;
+public:
+  byte sender= DEVICE_ID;
+  byte recipient;
+};
+
+
+class DatagramReq : public TX_HEADER {
+protected:
+  byte opcode = OPCODE_SEND;
+public:
   byte sector;
+};
+
+class DatagramResp : public TX_HEADER {
+protected:
+  byte opcode = OPCODE_SEND;
+public:
+  byte sector;
+  byte dataLen = 0;
+};
+
+class TransferStartReq : public TX_HEADER {
+protected:
+  byte opcode = OPCODE_HANDSHAKE;
+};
+
+class TransferStartResp : public TX_HEADER {
+protected:
+  byte opcode = OPCODE_HANDSHAKE;
+public:
   byte sectorCount;
-  byte dataLen;
+  uint16_t finalSize;
+  uint32_t checksum;
 };
-struct TX_PAYLOAD {
-  TX_HEADER header;
-  byte data[DATA_SECTOR_SIZE];
-};
+
 
 bool startTransfer(FileStructure payload);
-void sendDatagram();
+void requestTransfer(byte recipient);
+void onTransferRequest(byte recipient);
+bool onTransferResponse(byte* rcvBuf, byte rcvBufSize);
+bool sendDatagram(byte sector, byte recipient);
+bool receiveDatagram(byte* rcvBuf, byte rcvBufSize);

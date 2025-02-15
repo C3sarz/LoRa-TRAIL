@@ -1,95 +1,144 @@
-#include <sys/_stdint.h>
 #include "lora.h"
 #include "data_transfer.h"
 
-extern FileStructure file;
-volatile bool txReady = true;
+extern FileStructure localFile;
+extern const uint32_t maxDataSize;
+volatile bool txReady = false;
 extern bool filePresent;
-volatile bool txOngoing = false;
-TX_PAYLOAD payload;
-byte dataBuffer[sizeof(TX_PAYLOAD)];
+volatile bool transferOngoing = false;
+volatile bool rxReady = false;
+byte server;
 
-// Start sending main payload in fragments.
-bool startTransfer(FileStructure payload) {
-  if (txOngoing) {
-    Serial.println("Sender busy!");
-    return false;
-  }
+const byte maxPayloadSize = 250;
+byte dataBuffer[maxPayloadSize];
 
-  if (!filePresent) {
-    Serial.println("No file present!");
-    return false;
-  }
-  file.header.isPending = true;
-  file.header.lastIndex = 0;
+//=========================================================
 
-  txReady = true;
 
-  return false;
+
+
+
+//=========================================================
+
+
+
+
+void requestTransfer(byte recipient){
+  // Build header
+  TransferStartReq header;
+  header.recipient = recipient;
+
+  // Copy header
+  memcpy(dataBuffer, &header, sizeof(header));
+
+  // Send LORA
+  send(dataBuffer, sizeof(header));
+  rxReady = true;
+  return;
 }
 
-void sendDatagram(){
+/// Prepare device for transmission, as requested
+void onTransferRequest(byte recipient){
+  // Read file from FRAM
+  // readFile();
 
-  byte currentIndex = file.header.lastIndex;
-  byte sectorCount = file.header.sectorCount;
-  void * sectorAddr = file.data[currentIndex];
-  double dataSize_D = static_cast<double>(file.header.dataSize);
+  // Build header
+  TransferStartResp header;
+  header.recipient = recipient;
+  header.checksum = localFile.header.checksum;
+  header.sectorCount = localFile.header.sectorCount;
+  header.finalSize = localFile.header.dataSize;
 
-  uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D-dataSize_D*(currentIndex/(double)sectorCount));
+  // Copy header
+  memcpy(dataBuffer, &header, sizeof(header));
 
-// create logic for payloads under 230B
+  // Send LORA
+  send(dataBuffer, sizeof(header));
+  return;
+}
 
-  //  = file.header.
+/// On transfer request accepted by sender
+bool onTransferResponse(byte* rcvBuf, byte rcvBufSize){
 
-  if(currentIndex == 0){
-    payload.header.opcode = OPCODE_START;
+  // Validate header size
+  if (rcvBufSize < sizeof(TransferStartResp)) {
+    return false;
   }
-  else if(currentIndex < sectorCount){
-    payload.header.opcode = OPCODE_SEND;
+
+  // Validate and copy
+  TransferStartResp header;
+  memcpy(&header, rcvBuf, sizeof(TransferStartResp));
+
+  // Validate header
+  if(header.sectorCount > DATA_SECTORS_MAX || header.finalSize > maxDataSize){
+    return false;
   }
-    else if(currentIndex >= sectorCount){
-    payload.header.opcode = OPCODE_END;
+  
+  // Prepare file on FRAM
+  initFileReceiver(header.checksum, header.sectorCount, header.finalSize);
+
+  // ENABLE DATA RECEPTION LOOP
+  transferOngoing = true;
+  txReady = true;
+  return true;
+}
+
+/// Send specific sector to server.
+bool sendDatagram(byte sector, byte recipient) {
+  byte sectorCount = localFile.header.sectorCount;
+  void* sectorAddr = localFile.data[sector];
+  double dataSize_D = static_cast<double>(localFile.header.dataSize);
+  uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D - dataSize_D * (sector / (double)sectorCount));
+  byte dataLen = 0;
+  DatagramResp header;
+
+  // create logic for payloads under 230B
+  if (remainingBytes < DATA_SECTOR_SIZE) {
+    dataLen = remainingBytes;
+  } else {
+    dataLen = DATA_SECTOR_SIZE;
   }
 
+  // Build header
+  header.dataLen = dataLen;
+  header.sector = sector;
+  header.recipient = recipient;
+  header.sender = DEVICE_ID;
 
-  payload.header.txID = file.header.checksum;
-  payload.header.sector = currentIndex;
-  payload.header.sectorCount = sectorCount;
-
-// Copy data
-  memcpy(payload.data, sectorAddr, DATA_SECTOR_SIZE);
+  // Copy header
+  memcpy(dataBuffer, &header, sizeof(header));
 
   // Copy payload to buffer
-  memcpy(dataBuffer, &payload, sizeof(TX_HEADER)+payload.header.dataLen);
-  
+  memcpy(dataBuffer + sizeof(header), sectorAddr, dataLen);
+
   // Send LORA
-  send(dataBuffer, sizeof(sizeof(TX_HEADER)+payload.header.dataLen));
+  send(dataBuffer, sizeof(header) + dataLen);
+  return true;
 }
 
 // RX
-bool receiveDatagram(byte* rcvBuf, byte rcvBufSize){
-  
-  if(rcvBufSize < sizeof(TX_PAYLOAD)){
+bool receiveDatagram(byte* rcvBuf, byte rcvBufSize) {
+
+  // Validate header size
+  if (rcvBufSize < sizeof(DatagramResp)) {
     return false;
   }
-  memcpy(&payload, rcvBuf, rcvBufSize);
 
-  
-  // LOGIC FOR RX missing
-
-  if(OPCODE_START){
-
-  currentIndex = file.header.lastIndex;
-  byte sectorCount = file.header.sectorCount;
-  void * sectorAddr = file.data[currentIndex];
-  }
-  else if(OPCODE_SEND){
-
-  }
-  else if(OPCODE_END){
-
+  // Validate and copy dataLen
+  DatagramResp header;
+  memcpy(&header, rcvBuf, sizeof(DatagramResp));
+  if (header.dataLen > rcvBufSize - sizeof(DatagramResp)
+      || header.dataLen > DATA_SECTOR_SIZE) {
+    return false;
   }
 
-  return false;
+// Validate header
+  if(header.sector > localFile.header.sectorCount){
+    return false;
+  }
+
+  // Copy data
+  bool result = writeSector(rcvBuf + sizeof(DatagramResp), header.dataLen, header.sector);
+
+  return result;
 }
-

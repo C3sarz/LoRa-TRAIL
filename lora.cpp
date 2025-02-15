@@ -1,5 +1,5 @@
 #include "lora.h"
-#define DEBUG 1
+#include "conf.h"
 
 // For working with the transceiver
 #include "LoRaWan-Arduino.h"  // Click here to get the library: http://librarymanager/All#SX126x
@@ -7,6 +7,12 @@
 #include "rtos.h"
 rtos::Semaphore cadInProgress;
 bool channelBusy = true;
+
+// Interfaces
+extern volatile bool rxReady;
+void * onDatagram(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr);
+void * onDataRxTimeout();
+RX_HANDLERS* callbackHandler = NULL;
 
 #ifdef DEBUG
 unsigned long int cadTime = 0;
@@ -17,22 +23,15 @@ static RadioEvents_t RadioEvents;
 
 void loraSetup() {
 
-#ifdef DEBUG
-  Serial.println("=================================================================");
-  Serial.println("Initializing LoRaP2P Tx for sending sensor data via text messages");
-  Serial.println("=================================================================");
-  Serial.println("Serial port initialized");
-#endif
-
   // Initialize LoRa chip.
   lora_rak11300_init();
 
   // Initialize the Radio callbacks
   RadioEvents.TxDone = OnTxDone;
-  RadioEvents.RxDone = NULL;
   RadioEvents.TxTimeout = OnTxTimeout;
-  RadioEvents.RxTimeout = NULL;
-  RadioEvents.RxError = NULL;
+  RadioEvents.RxDone = onRxDone;
+  RadioEvents.RxTimeout = onRxTimeout;
+  RadioEvents.RxError = onRxError;
   RadioEvents.CadDone = OnCadDone;
 
   // Initialize the Radio
@@ -47,12 +46,26 @@ void loraSetup() {
                     LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
                     true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
 
+  // Set Radio RX configuration
+  Radio.SetRxConfig(MODEM_LORA, LORA_BANDWIDTH, LORA_SPREADING_FACTOR,
+                    LORA_CODINGRATE, 0, LORA_PREAMBLE_LENGTH,
+                    LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
+                    true, true, 0, 0, LORA_IQ_INVERSION_ON, true);
+
 // Ready to go
 #ifdef DEBUG
   Serial.println("=================================================================");
   Serial.println("LoRa Node: Initialization completed");
   Serial.println("=================================================================");
 #endif
+}
+
+void setupRx(RX_HANDLERS* handlers){
+  callbackHandler = handlers;
+}
+
+void tryRx(uint16_t timeout){
+  Radio.Rx(timeout);
 }
 
 /** @brief Function to be executed on Radio Tx Done event
@@ -69,6 +82,22 @@ void OnTxTimeout(void) {
 #ifdef DEBUG
   Serial.println("OnTxTimeout");
 #endif
+}
+
+void onRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr){
+  if(callbackHandler != NULL){
+    callbackHandler->RxDone(payload, size, rssi, snr);
+  }
+}
+
+void onRxError(){
+  Serial.println("RX ERROR");
+}
+
+void onRxTimeout() {
+  if(callbackHandler != NULL){
+    callbackHandler->RxTimeout();
+  }
 }
 
 /** @brief Function to transmit a message

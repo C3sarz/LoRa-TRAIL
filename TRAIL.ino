@@ -2,11 +2,18 @@
 #include "storage_manager.h"
 #include "lora.h"
 #include "data_transfer.h"
+#include "conf.h"
 
-extern FileStructure file;
+extern FileStructure localFile;
 bool filePresent = false;
 const bool sender = true;
-extern volatile bool txOngoing;
+extern volatile bool transferOngoing;
+extern volatile bool rxReady;
+
+// Timing
+extern unsigned long uplinkPeriod;
+unsigned long lastRequest = millis();
+unsigned long periodResult;
 
 
 void setup() {
@@ -23,13 +30,21 @@ void setup() {
   }
   setupStorage();
   filePresent = readFile();
-  txOngoing = !filePresent || !(file.header.isPending);
+  transferOngoing = !filePresent || !(localFile.header.isPending);
 
+  loraSetup();
+
+
+  Serial.printf("===============\r\n TRAIL STARTING\r\nROLE:%s\r\n===============\r\n",SERVER == 1 ? "Server" : "Client");
   delay(1000);
 }
 
-
 void loop() {
+
+  if(rxReady){
+    tryRx(20000);
+  }
+
   if (Serial.available() > 0) {
 
     // Serial console debug commands
@@ -37,21 +52,22 @@ void loop() {
     Serial.printf("Rcvd: %c\r\n", rcvd);
     switch (rcvd) {
       case 's':
-        if (sender) startTransfer(file);
+      #ifndef SERVER
+        requestTransfer(0x06);
+        Radio.Rx(10000);
+        #endif
         break;
       case 'd':
-        // printSummary();
-        // printFWInfo();
-        // Serial.printf("Current DR: %u\r\n", getADRDatarate());
         break;
       case 't':
         {
-          readWriteTest();
+          // readWriteTest();
           break;
         }
       case 'f':
         {
           readFile();
+          rxReady = true;
           break;
         }
       case 'w':
