@@ -1,53 +1,209 @@
 #include "lora.h"
 #include "data_transfer.h"
 
-extern FileStructure localFile;
+extern FileStructure file;
 extern const uint32_t maxDataSize;
 volatile bool txReady = false;
-extern bool filePresent;
-volatile bool transferOngoing = false;
 volatile bool rxReady = false;
-byte server;
+extern byte transferState;
+static RX_HANDLERS callbackHandler = {
+  onRx,
+  onTimeout,
+  TxDone
+};
+static byte txRecipient;
+
 
 const byte maxPayloadSize = 250;
 byte dataBuffer[maxPayloadSize];
 
 //=========================================================
 
+void onRx(uint8_t* payload, uint16_t size, int16_t rssi, int8_t snr) {
+  rxReady = false;
+
+  // Validate header size
+  if (size < sizeof(TX_HEADER)) {
+    return;
+  }
+
+  // Validate and copy
+  TX_HEADER baseHeader;
+  memcpy(&baseHeader, payload, sizeof(TX_HEADER));
+
+  Serial.print("PACKET: ");
+  for (int i = 0; i < size; i++) {
+    Serial.printf("%x ", payload[i]);
+  }
+  Serial.println();
+
+  if (baseHeader.SYNCWORD != TX_SYNC_WORD) {
+    return;
+  }
+
+  txRecipient = baseHeader.recipient;
+  switch (baseHeader.opcode) {
+    case OPCODE_HANDSHAKE_REQ:
+      transferState = TRANSFER_REQUESTED_HANDSHAKE;
+      break;
+    case OPCODE_HANDSHAKE_RESP:
+      transferState = TRANSFER_REQUEST_DATA;
+      break;
+    case OPCODE_DATAGRAM_REQ:
+      onDatagramRequest(payload, size);
+      transferState = TRANSFER_SENDING_DATA;
+      break;
+    case OPCODE_DATAGRAM_RESP:
+      transferState = TRANSFER_WAIT;
+      if (receiveDatagram(payload, size)) {
+      }
+      transferState = TRANSFER_WAIT;
+      break;
+    case OPCODE_HEARTBEAT:
+    case OPCODE_LINK:
+    case OPCODE_ERROR:
+    default:
+      Serial.printf("Invalid RX Opcode: %u\r\n", baseHeader.opcode);
+  }
+  return;
+}
 
 
+void dataTransferStateLogic() {
 
+  switch (transferState) {
+    case TRANSFER_REQUESTED_HANDSHAKE:
+      Serial.println("TX_REQ");
+      onTransferRequest(txRecipient);
+      transferState = TRANSFER_LISTEN;
+      break;
+    case TRANSFER_LISTEN:
+#ifdef SERVER
+      tryRx(0);
+#else
+      tryRx(10000);
+#endif
+      transferState = TRANSFER_BUSY;
+      break;
+
+    // Get next datagram
+    case TRANSFER_REQUEST_DATA:
+
+      static byte status = verifyFile();
+
+      if (status == ITERATING_SECTORS) {
+        Serial.printf("==================\r\nGet datagram %u\r\n", file.header.nextSector);
+        delay(500);
+
+        getDatagram(file.header.nextSector, txRecipient);
+        transferState = TRANSFER_LISTEN;
+      } else {
+        Serial.printf("\r\n+++++++++++++++\r\nTx complete!!!!\r\n+++++++++++++++\r\n");
+        transferState = TRANSFER_IDLE;
+      }
+      break;
+    case TRANSFER_SENDING_DATA:
+      delay(500);
+      sendDatagram(file.header.nextSector, txRecipient);
+      transferState = TRANSFER_IDLE;
+      break;
+    case TRANSFER_WAIT:
+      delay(3000);
+      transferState = TRANSFER_REQUEST_DATA;
+      break;
+
+    case TRANSFER_COMPLETE:
+      digitalWrite(LED_BLUE, false);
+      // tx complete
+      break;
+    case TRANSFER_BUSY:
+      break;
+    case TRANSFER_IDLE:
+    default:
+
+#ifdef SERVER
+      transferState = TRANSFER_LISTEN;
+#else
+      transferState = TRANSFER_IDLE;
+#endif
+  }
+}
 
 //=========================================================
 
+///
+///
+///
+void onTimeout() {
+  transferState = TRANSFER_IDLE;
+}
 
+///
+///
+///
+void TxDone() {
 
+  // #ifdef SERVER
+  // TRANSFER_LISTEN;
+  // #else
+  transferState = TRANSFER_LISTEN;
+#ifndef SERVER
+  transferState = TRANSFER_REQUEST_DATA;
+#endif
+  // #endif
+}
 
-void requestTransfer(byte recipient){
+///
+///
+///
+void initTransferLogic() {
+
+  setupRx(&callbackHandler);
+
+  byte fileState = verifyFile();
+  // if (fileState == ITERATING_SECTORS) {
+  //   transferState = TRANSFER_REQUEST_DATA;
+  // }
+  Serial.println("Transfer logic setup");
+  return;
+}
+
+///
+///
+///
+void requestTransfer(byte recipient) {
   // Build header
   TransferStartReq header;
   header.recipient = recipient;
+  txRecipient = recipient;
 
   // Copy header
   memcpy(dataBuffer, &header, sizeof(header));
 
   // Send LORA
   send(dataBuffer, sizeof(header));
-  rxReady = true;
   return;
 }
 
 /// Prepare device for transmission, as requested
-void onTransferRequest(byte recipient){
+///
+///
+void onTransferRequest(byte recipient) {
   // Read file from FRAM
   // readFile();
 
+  // DEBUG
+  writeDefaultFile();
+  readFile();
+  digitalWrite(LED_BLUE, true);
+
   // Build header
   TransferStartResp header;
+  txRecipient = recipient;
   header.recipient = recipient;
-  header.checksum = localFile.header.checksum;
-  header.sectorCount = localFile.header.sectorCount;
-  header.finalSize = localFile.header.dataSize;
+  header.checksum = file.header.checksum;
+  header.sectorCount = file.header.sectorCount;
+  header.finalSize = file.header.dataSize;
 
   // Copy header
   memcpy(dataBuffer, &header, sizeof(header));
@@ -57,8 +213,40 @@ void onTransferRequest(byte recipient){
   return;
 }
 
+/// Prepare device for transmission, as requested
+///
+///
+bool onDatagramRequest(byte* rcvBuf, byte rcvBufSize) {
+
+  DatagramReq header;
+
+  // Validate header size
+  if (rcvBufSize < sizeof(header)) {
+    return false;
+  }
+
+  // copy
+  memcpy(&header, rcvBuf, sizeof(header));
+
+
+  // Validate header
+  if (header.sector > file.header.sectorCount || header.checksum != file.header.checksum) {
+  // if (header.sector > file.header.sectorCount) {
+    return false;
+  }
+
+  // Update header
+  file.header.nextSector = header.sector;
+  Serial.printf("Sector %u will be sent.\r\n", file.header.nextSector);
+
+  writeHeader();
+  return true;
+}
+
 /// On transfer request accepted by sender
-bool onTransferResponse(byte* rcvBuf, byte rcvBufSize){
+///
+///
+bool onTransferResponse(byte* rcvBuf, byte rcvBufSize) {
 
   // Validate header size
   if (rcvBufSize < sizeof(TransferStartResp)) {
@@ -67,27 +255,47 @@ bool onTransferResponse(byte* rcvBuf, byte rcvBufSize){
 
   // Validate and copy
   TransferStartResp header;
-  memcpy(&header, rcvBuf, sizeof(TransferStartResp));
+  memcpy(&header, rcvBuf, sizeof(header));
 
   // Validate header
-  if(header.sectorCount > DATA_SECTORS_MAX || header.finalSize > maxDataSize){
+  if (header.sectorCount > DATA_SECTORS_MAX || header.finalSize > maxDataSize) {
     return false;
   }
-  
+
   // Prepare file on FRAM
   initFileReceiver(header.checksum, header.sectorCount, header.finalSize);
 
-  // ENABLE DATA RECEPTION LOOP
-  transferOngoing = true;
-  txReady = true;
   return true;
 }
 
+/// Ask for specific sector to server.
+///
+///
+void getDatagram(byte sector, byte recipient) {
+
+  // Build header
+  DatagramReq header;
+  header.recipient = recipient;
+  header.sector = sector;
+
+  // Verify if file is the same as before
+  header.checksum = file.header.checksum;
+
+  // Copy header
+  memcpy(dataBuffer, &header, sizeof(header));
+
+  // Send LORA
+  send(dataBuffer, sizeof(header));
+  return;
+}
+
 /// Send specific sector to server.
+///
+///
 bool sendDatagram(byte sector, byte recipient) {
-  byte sectorCount = localFile.header.sectorCount;
-  void* sectorAddr = localFile.data[sector];
-  double dataSize_D = static_cast<double>(localFile.header.dataSize);
+  byte sectorCount = file.header.sectorCount;
+  void* sectorAddr = file.data[sector];
+  double dataSize_D = static_cast<double>(file.header.dataSize);
   uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D - dataSize_D * (sector / (double)sectorCount));
   byte dataLen = 0;
   DatagramResp header;
@@ -116,7 +324,10 @@ bool sendDatagram(byte sector, byte recipient) {
   return true;
 }
 
+
 // RX
+///
+///
 bool receiveDatagram(byte* rcvBuf, byte rcvBufSize) {
 
   // Validate header size
@@ -132,13 +343,12 @@ bool receiveDatagram(byte* rcvBuf, byte rcvBufSize) {
     return false;
   }
 
-// Validate header
-  if(header.sector > localFile.header.sectorCount){
+  // Validate header
+  if (header.sector > file.header.sectorCount) {
     return false;
   }
 
-  // Copy data
+  // Copies data and increments nextSector
   bool result = writeSector(rcvBuf + sizeof(DatagramResp), header.dataLen, header.sector);
-
   return result;
 }

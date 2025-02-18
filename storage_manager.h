@@ -8,11 +8,20 @@
 #define DATA_SECTORS_MAX 130
 #define DATA_HEAD 0x88
 
+
+enum FILE_PROGRESS {
+  ITERATING_SECTORS,
+  MISSING_SECTORS,
+  CHECKSUM_FAILED,
+  FILE_COMPLETE,
+  FILE_CORRUPT,
+};
+
 struct FileHeader {
   byte head;
   uint16_t dataSize;
   uint16_t pendingBytes;
-  byte lastIndex;
+  byte nextSector;
   byte sectorCount;
   byte sectorMask[DATA_SECTORS_MAX/8+1];
   bool isPending;
@@ -24,7 +33,8 @@ struct FileStructure {
   byte data[DATA_SECTORS_MAX][DATA_SECTOR_SIZE];
 };
 
-bool verifyFile();
+byte verifyFile();
+void writeHeader();
 bool writeFileSender(byte *data, uint16_t dataSize);
 bool setupStorage();
 bool readFile();

@@ -4,11 +4,10 @@
 #include "data_transfer.h"
 #include "conf.h"
 
-extern FileStructure localFile;
+extern FileStructure file;
 bool filePresent = false;
 const bool sender = true;
-extern volatile bool transferOngoing;
-extern volatile bool rxReady;
+extern byte transferState;
 
 // Timing
 extern unsigned long uplinkPeriod;
@@ -17,6 +16,12 @@ unsigned long periodResult;
 
 
 void setup() {
+
+
+  pinMode(LED_BLUE, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_BLUE, LOW);
 
   // Init serial
   time_t timeout = millis();
@@ -28,22 +33,32 @@ void setup() {
       break;
     }
   }
+
+#ifdef SERVER
+  Serial.printf("===============\r\n TRAIL STARTING\r\nROLE:%s\r\n===============\r\n", "Server");
+#else
+
+  Serial.printf("===============\r\n TRAIL STARTING\r\nROLE:%s\r\n===============\r\n", "CLIENT");
+#endif
+
+  delay(100);
   setupStorage();
-  filePresent = readFile();
-  transferOngoing = !filePresent || !(localFile.header.isPending);
+  readFile();
+  initTransferLogic();
+  delay(500);
+  setupRF();
 
-  loraSetup();
+
+  Serial.println("test");
+
+  // MISSING RESTORE STATE
 
 
-  Serial.printf("===============\r\n TRAIL STARTING\r\nROLE:%s\r\n===============\r\n",SERVER == 1 ? "Server" : "Client");
-  delay(1000);
+
+  delay(5000);
 }
 
 void loop() {
-
-  if(rxReady){
-    tryRx(20000);
-  }
 
   if (Serial.available() > 0) {
 
@@ -52,12 +67,12 @@ void loop() {
     Serial.printf("Rcvd: %c\r\n", rcvd);
     switch (rcvd) {
       case 's':
-      #ifndef SERVER
+#ifndef SERVER
         requestTransfer(0x06);
-        Radio.Rx(10000);
-        #endif
+#endif
         break;
       case 'd':
+        printHeader(file.header);
         break;
       case 't':
         {
@@ -67,16 +82,15 @@ void loop() {
       case 'f':
         {
           readFile();
-          rxReady = true;
           break;
         }
-      case 'w':
-        // tryWriteStoredConfig();
+      case 'l':
+
         break;
       case 'v':
         verifyFile();
         break;
-      case 'l':
+      case 'w':
         writeDefaultFile();
         break;
       case 'r':
@@ -85,4 +99,6 @@ void loop() {
         break;
     }
   }
+
+  dataTransferStateLogic();
 }

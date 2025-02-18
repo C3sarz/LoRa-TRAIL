@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define DEBUG 1
+
 
 // Define LoRa parameters
 #define RF_FREQUENCY 915000000   // Hz
@@ -12,14 +12,16 @@
 #define LORA_FIX_LENGTH_PAYLOAD_ON false
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 0
-#define TX_TIMEOUT_VALUE 5000
+#define TX_TIMEOUT_VALUE 7000
 
 struct RX_HANDLERS{
   void (*RxDone)(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr);
   void (*RxTimeout)();
+  void (*TxDone)();
 };
 
 // Forward function declarations
+void setupRF();
 void OnTxDone(void);
 void OnTxTimeout(void);
 void send(byte* data, byte dataLen);
@@ -28,5 +30,4 @@ void onRxDone(uint8_t * payload, uint16_t size, int16_t rssi, int8_t snr);
 void onRxTimeout();
 void onRxError();
 void tryRx(uint16_t timeout);
-void loraSetup();
 void setupRx(RX_HANDLERS* handlers);

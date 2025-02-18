@@ -1,4 +1,3 @@
-#include <sys/_stdint.h>
 #include "storage_manager.h"
 #include "RAK1500x_MB85RC.h"
 #include <Arduino_CRC32.h>
@@ -9,11 +8,14 @@
 
 RAK_MB85RC MB85RC;
 Arduino_CRC32 crc32;
-FileStructure localFile;
+FileStructure file;
 
 const uint32_t fileSize = sizeof(FileStructure);
 const uint32_t maxDataSize = fileSize - sizeof(FileHeader);
 
+///
+///
+///
 bool setupStorage() {
 
   // Wisblock module setup
@@ -52,13 +54,17 @@ bool setupStorage() {
 }
 
 /// Print file header details.
+///
+///
 void printHeader(FileHeader header) {
   Serial.printf("==Header==\r\nSize: %u\r\nSectors: %u\r\nChecksum: %u\r\n", header.dataSize, header.sectorCount, header.checksum);
-  Serial.printf("pendingBytes: %u\r\nlastIndex: %u\r\n", header.pendingBytes, header.lastIndex);
+  Serial.printf("pendingBytes: %u\r\nlastIndex: %u\r\n", header.pendingBytes, header.nextSector);
 }
 
 
 // Read file stored in FRAM
+///
+///
 bool readFile() {
   const byte readBufferSize = DATA_SECTOR_SIZE;
   byte readBuffer[readBufferSize];
@@ -68,26 +74,24 @@ bool readFile() {
   printHeader(header);
 
   // Verify header
-  if (localFile.header.head != DATA_HEAD
-      && localFile.header.dataSize > maxDataSize) {
+  if (file.header.head != DATA_HEAD
+      && file.header.dataSize > maxDataSize) {
     return false;
   }
 
   // Copy header
-  memcpy(&(localFile.header), &header, sizeof(FileHeader));
+  memcpy(&(file.header), &header, sizeof(FileHeader));
 
   for (uint i = 0; i < header.sectorCount; i++) {
     MB85RC.read(sizeof(FileHeader) + i * header.sectorCount, (uint8_t *)(readBuffer), readBufferSize);
   }
-
-  if (verifyFile()) {
-    Serial.println("File read successful!");
-    return true;
-  }
-
+  Serial.println("File read successful!");
   return false;
 }
 
+///
+///
+///
 bool writeDefaultFile() {
   Serial.println("Writing default file...");
 
@@ -108,31 +112,29 @@ void initFileReceiver(uint32_t checksum, byte sectorCount, uint16_t dataSize) {
 
   // Clear mask
   for (uint i = 0; i < (DATA_SECTORS_MAX / 8 + 1); i++) {
-    localFile.header.sectorMask[i] &= 0;
+    file.header.sectorMask[i] &= 0;
   }
 
-  // // Calculate header values
-  // byte sectorCount = (byte)std::ceil(((double)dataSize) / (double)DATA_SECTOR_SIZE);
-
   // Create header
-  localFile.header.dataSize = dataSize;
-  localFile.header.pendingBytes = dataSize;
-  localFile.header.head = DATA_HEAD;
-  localFile.header.isPending = true;
-  localFile.header.lastIndex = 0;
-  localFile.header.sectorCount = sectorCount;
-  localFile.header.checksum = checksum;
+  file.header.dataSize = dataSize;
+  file.header.pendingBytes = dataSize;
+  file.header.head = DATA_HEAD;
+  file.header.isPending = true;
+  file.header.nextSector = 0;
+  file.header.sectorCount = sectorCount;
+  file.header.checksum = checksum;
 
-  // Write to chip
-  MB85RC.write(0, (uint8_t *)&localFile, fileSize);
+  writeHeader();
   return;
 }
 
 /// Write sector into storage.
+///
+///
 bool writeSector(byte *data, uint16_t dataSize, byte sector) {
 
   // Sanity checks
-  if (dataSize > DATA_SECTOR_SIZE || sector > DATA_SECTORS_MAX || localFile.header.head != DATA_HEAD) {
+  if (dataSize > DATA_SECTOR_SIZE || sector > DATA_SECTORS_MAX || file.header.head != DATA_HEAD) {
     return false;
   }
 
@@ -141,28 +143,30 @@ bool writeSector(byte *data, uint16_t dataSize, byte sector) {
   byte subMaskIndex = sector / 8;
 
   // Selected bit in submask (bit in the array element)
-  byte subMaskBit = (sector - 1) % 8;
+  byte subMaskBit = (sector) % 8;
 
   // Move bit to location and update mask.
-  byte subMask = localFile.header.sectorMask[subMaskIndex] | (1 >> subMaskBit);
-  localFile.header.sectorMask[subMaskIndex] = subMask;
+  byte subMask = file.header.sectorMask[subMaskIndex] | (1 >> subMaskBit);
+  file.header.sectorMask[subMaskIndex] = subMask;
 
   // == Modify header
-  double dataSize_D = static_cast<double>(localFile.header.dataSize);
-  uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D - dataSize_D * (sector / (double)localFile.header.sectorCount));
-  localFile.header.lastIndex = sector;
-  localFile.header.pendingBytes = remainingBytes;
+  double dataSize_D = static_cast<double>(file.header.dataSize);
+  uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D - dataSize_D * (sector / (double)file.header.sectorCount));
+  file.header.nextSector = sector + 1;
+  file.header.pendingBytes = remainingBytes;
 
   // == Copy data
-  memcpy(localFile.data[sector], data, dataSize);
+  memcpy(file.data[sector], data, dataSize);
 
   // Write to chip
-  MB85RC.write(0, (uint8_t *)&localFile, fileSize);
+  MB85RC.write(0, (uint8_t *)&file, fileSize);
   Serial.printf("Sector written to storage!\r\nSize: %u\r\nSector: %u\r\nRemaining: %u bytes\r\n", dataSize, sector, remainingBytes);
   return true;
 }
 
 // Write whole file into storage.
+///
+///
 bool writeFileSender(byte *data, uint16_t dataSize) {
 
   // Sanity checks
@@ -171,25 +175,25 @@ bool writeFileSender(byte *data, uint16_t dataSize) {
   }
 
   // Copy data
-  memcpy(localFile.data, data, dataSize);
+  memcpy(file.data, data, dataSize);
 
   // Calculate header values
   byte sectorCount = (byte)std::ceil(((double)dataSize) / (double)DATA_SECTOR_SIZE);
 
   // Modify header
-  localFile.header.dataSize = dataSize;
-  localFile.header.pendingBytes = dataSize;
-  localFile.header.head = DATA_HEAD;
-  localFile.header.isPending = true;
-  localFile.header.lastIndex = 0;
-  localFile.header.sectorCount = sectorCount;
+  file.header.dataSize = dataSize;
+  file.header.pendingBytes = dataSize;
+  file.header.head = DATA_HEAD;
+  file.header.isPending = true;
+  file.header.nextSector = 0;
+  file.header.sectorCount = sectorCount;
 
 
-  uint32_t calc_checksum = crc32.calc((uint8_t *)(&localFile.data), localFile.header.dataSize);
-  localFile.header.checksum = calc_checksum;
+  uint32_t calc_checksum = crc32.calc((uint8_t *)(&file.data), file.header.dataSize);
+  file.header.checksum = calc_checksum;
 
   // Write to chip
-  MB85RC.write(0, (uint8_t *)&localFile, fileSize);
+  MB85RC.write(0, (uint8_t *)&file, fileSize);
 
   if (verifyFile()) {
     Serial.printf("File written to storage!\r\nSize: %u\r\nSectors: %u\r\nChecksum: %u\r\n", dataSize, sectorCount, calc_checksum);
@@ -199,29 +203,57 @@ bool writeFileSender(byte *data, uint16_t dataSize) {
   return false;
 }
 
-bool verifyFile() {
-  bool result = false;
+// Updates file header in FRAM
+///
+///
+void writeHeader() {
+  // Write to chip
+  MB85RC.write(0, (uint8_t *)&file.header, sizeof(FileHeader));
+  Serial.println("Header updated");
+}
+
+/// VERIFY if file is complete and valid
+///
+///
+byte verifyFile() {
+  byte result = ITERATING_SECTORS;
   uint32_t calc_checksum = 0;
 
-  // Verify FILE
-  if (localFile.header.head == DATA_HEAD
-      && localFile.header.dataSize <= maxDataSize) {
-    uint32_t checksum = localFile.header.checksum;
-    calc_checksum = crc32.calc((uint8_t *)localFile.data, localFile.header.dataSize);
+  // Verify FILE structure
+  if (file.header.head != DATA_HEAD
+      && file.header.dataSize > maxDataSize) {
+    return FILE_CORRUPT;
+  }
+  else if (file.header.nextSector > file.header.sectorCount) {
+
+    // MISSING MASK VALIDATION
+
+    file.header.isPending = false;
+    writeHeader();
+  }
+
+  // Get checksums
+  if (!file.header.isPending) {
+
+    uint32_t checksum = file.header.checksum;
+    calc_checksum = crc32.calc((uint8_t *)file.data, file.header.dataSize);
 
     if (calc_checksum == checksum) {
-      result = true;
+      result = FILE_COMPLETE;
+    } else {
+      result = CHECKSUM_FAILED;
     }
+    Serial.printf("file_checksum: %u calc_checksum: %u\r\n", checksum, calc_checksum);
   }
-  Serial.printf("Verify result: %u, checksum: %u\r\n", result, calc_checksum);
-  // printHeader(file.header);
+
+  printHeader(file.header);
+  Serial.printf("Verify result: %u\r\n", result);
   return result;
 }
 
-
-
-
 // From RAK docs
+///
+///
 void readWriteTest() {
   char writeBuf[16] = ">>Test RAK1500X";
   char readBuf[16] = { 0 };

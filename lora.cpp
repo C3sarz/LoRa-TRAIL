@@ -9,20 +9,17 @@ rtos::Semaphore cadInProgress;
 bool channelBusy = true;
 
 // Interfaces
-extern volatile bool rxReady;
-void * onDatagram(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr);
-void * onDataRxTimeout();
-RX_HANDLERS* callbackHandler = NULL;
+static RX_HANDLERS* callbackHandler = NULL;
 
-#ifdef DEBUG
+
 unsigned long int cadTime = 0;
-#endif
 
 // LoRa chip variables
 static RadioEvents_t RadioEvents;
 
-void loraSetup() {
+void setupRF() {
 
+  Serial.println("start lora setup");
   // Initialize LoRa chip.
   lora_rak11300_init();
 
@@ -52,50 +49,55 @@ void loraSetup() {
                     LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
                     true, true, 0, 0, LORA_IQ_INVERSION_ON, true);
 
-// Ready to go
-#ifdef DEBUG
-  Serial.println("=================================================================");
+  // Ready to go
+  // Serial.println("=================================================================");
   Serial.println("LoRa Node: Initialization completed");
-  Serial.println("=================================================================");
-#endif
+  // Serial.println("=================================================================");
+  return;
 }
 
-void setupRx(RX_HANDLERS* handlers){
+void setupRx(RX_HANDLERS* handlers) {
   callbackHandler = handlers;
 }
 
-void tryRx(uint16_t timeout){
+void tryRx(uint16_t timeout) {
+  delay(500);
+  digitalWrite(LED_GREEN, true);
   Radio.Rx(timeout);
 }
 
 /** @brief Function to be executed on Radio Tx Done event
  */
 void OnTxDone(void) {
-#ifdef DEBUG
-  Serial.println("OnTxDone");
-#endif
+
+  digitalWrite(LED_BLUE, false);
+  // Serial.println("OnTxDone");
+  callbackHandler->TxDone();
 }
 
 /**@brief Function to be executed on Radio Tx Timeout event
  */
 void OnTxTimeout(void) {
-#ifdef DEBUG
+
   Serial.println("OnTxTimeout");
-#endif
+
+  digitalWrite(LED_BLUE, false);
 }
 
-void onRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr){
-  if(callbackHandler != NULL){
+void onRxDone(uint8_t* payload, uint16_t size, int16_t rssi, int8_t snr) {
+  if (callbackHandler != NULL) {
     callbackHandler->RxDone(payload, size, rssi, snr);
   }
 }
 
-void onRxError(){
+void onRxError() {
+  digitalWrite(LED_GREEN, false);
   Serial.println("RX ERROR");
 }
 
 void onRxTimeout() {
-  if(callbackHandler != NULL){
+  digitalWrite(LED_GREEN, false);
+  if (callbackHandler != NULL) {
     callbackHandler->RxTimeout();
   }
 }
@@ -104,15 +106,16 @@ void onRxTimeout() {
  */
 void send(byte* data, byte dataLen) {
 
+  digitalWrite(LED_BLUE, true);
+
   // CAD to ensure channel not active. Wait until channel not busy.
   // https://news.rakwireless.com/channel-activity-detection-ensuring-your-lora-r-packets-are-sent
   // https://forum.rakwireless.com/t/how-to-calculate-the-best-cad-settings/13984/5
   channelBusy = true;  // assume channel is busy
   while (channelBusy)  // wait for channel to be not busy before sending a message
   {
-#ifdef DEBUG
-    cadTime = millis();  // mark the time CAD process starts
-#endif
+
+    cadTime = millis();       // mark the time CAD process starts
     cadInProgress.release();  // reset the in-progress flag
     Radio.Standby();          // put radio on standby
     Radio.SetCadParams(LORA_CAD_08_SYMBOL, LORA_SPREADING_FACTOR + 13, 10, LORA_CAD_RX, 0);
@@ -123,35 +126,39 @@ void send(byte* data, byte dataLen) {
     while (!cadInProgress.try_acquire())
       ;  // aquire CAD semaphore
 
-// Start CAD thread
-// (It does seem CAD process runs as an independent thread)
-#ifdef DEBUG
-    Serial.println("Starting CAD");
-#endif
+    // Start CAD thread
+    // (It does seem CAD process runs as an independent thread)
+
+    // Serial.println("Starting CAD");
     Radio.StartCad();
 
     // Wait unti OnCadDone finishes
     while (!cadInProgress.try_acquire())
       ;
     if (channelBusy) {
-#ifdef DEBUG
-      Serial.println("Channel Busy");
-#endif
-    }
-#ifdef DEBUG
-    else
-      Serial.println("Channel not busy");
-#endif
-  }
 
+      // Serial.println("Channel Busy");
+    }
+
+
+  }
+  Serial.printf("SEND: %u bytes\r\n", dataLen);
+  Serial.print("OUTPUT PACKET: ");
+  for (int i = 0; i < dataLen; i++) {
+    Serial.printf("%x ", data[i]);
+  }
+  Serial.println();
+  
   Radio.Send(data, dataLen);
+
+
 }
 
 /**
    @brief CadDone callback: is the channel busy?
 */
 void OnCadDone(bool cadResult) {
-#ifdef DEBUG
+
   time_t duration = millis() - cadTime;
   if (cadResult)  // true = busy / Channel Activity Detected; false = not busy / channel activity not detected
   {
@@ -159,18 +166,17 @@ void OnCadDone(bool cadResult) {
   } else {
     Serial.printf("CAD returned channel free after %ldms\n", duration);
   }
-#endif
 
   channelBusy = cadResult;
 
-#ifdef DEBUG
+
   osStatus status = cadInProgress.release();
   switch (status) {
     case osOK:
-      Serial.println("token has been correctly released");
+      // Serial.println("token has been correctly released");
       break;
     case osErrorResource:
-      Serial.println("maximum token count has been reached");
+      // Serial.println("maximum token count has been reached");
       break;
     case osErrorParameter:
       Serial.println("semaphore internal error");
@@ -179,8 +185,4 @@ void OnCadDone(bool cadResult) {
       Serial.println("unrecognized semaphore error");
       break;
   }
-#endif
-#ifndef DEBUG
-  cadInProgress.release();
-#endif
 }
