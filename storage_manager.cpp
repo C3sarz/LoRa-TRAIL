@@ -1,3 +1,4 @@
+#include <sys/_stdint.h>
 #include "storage_manager.h"
 #include "RAK1500x_MB85RC.h"
 #include <Arduino_CRC32.h>
@@ -82,8 +83,10 @@ bool readFile() {
   // Copy header
   memcpy(&(file.header), &header, sizeof(FileHeader));
 
-  for (uint i = 0; i < header.sectorCount; i++) {
-    MB85RC.read(sizeof(FileHeader) + i * header.sectorCount, (uint8_t *)(readBuffer), readBufferSize);
+  for (uint i = 0; i < DATA_SECTORS_MAX; i++) {
+    uint32_t offset = sizeof(header) + i * DATA_SECTOR_SIZE;
+    MB85RC.read(offset, (uint8_t *)(readBuffer), readBufferSize);
+    memcpy(file.data[i], readBuffer, readBufferSize);
   }
   Serial.println("File read successful!");
   return false;
@@ -99,7 +102,7 @@ bool writeDefaultFile() {
   extern const byte testFile[];
   extern const uint16_t testFileSize;
 
-  bool result = writeFileSender((byte *)testFile, testFileSize);
+  bool result = writeWholeFile((byte *)testFile, testFileSize);
 
   return result;
 }
@@ -159,7 +162,8 @@ bool writeSector(byte *data, uint16_t dataSize, byte sector) {
   memcpy(file.data[sector], data, dataSize);
 
   // Write to chip
-  MB85RC.write(0, (uint8_t *)&file, fileSize);
+  MB85RC.write(sizeof(file.header) + sector * DATA_SECTOR_SIZE, (uint8_t *)file.data[sector], fileSize);
+  writeHeader();
   Serial.printf("Sector written to storage!\r\nSize: %u\r\nSector: %u\r\nRemaining: %u bytes\r\n", dataSize, sector, remainingBytes);
   return true;
 }
@@ -167,7 +171,7 @@ bool writeSector(byte *data, uint16_t dataSize, byte sector) {
 // Write whole file into storage.
 ///
 ///
-bool writeFileSender(byte *data, uint16_t dataSize) {
+bool writeWholeFile(byte *data, uint16_t dataSize) {
 
   // Sanity checks
   if (dataSize > maxDataSize) {
@@ -182,18 +186,24 @@ bool writeFileSender(byte *data, uint16_t dataSize) {
 
   // Modify header
   file.header.dataSize = dataSize;
-  file.header.pendingBytes = dataSize;
+  file.header.pendingBytes = 0;
   file.header.head = DATA_HEAD;
-  file.header.isPending = true;
-  file.header.nextSector = 0;
+  file.header.isPending = false;
+  file.header.nextSector = sectorCount;
   file.header.sectorCount = sectorCount;
 
 
   uint32_t calc_checksum = crc32.calc((uint8_t *)(&file.data), file.header.dataSize);
   file.header.checksum = calc_checksum;
 
-  // Write to chip
-  MB85RC.write(0, (uint8_t *)&file, fileSize);
+  // Write header
+  writeHeader();
+
+  // Write data
+  for (uint i = 0; i < DATA_SECTORS_MAX; i++) {
+    uint32_t offset = sizeof(file.header) + i * DATA_SECTOR_SIZE;
+    MB85RC.write(offset, (uint8_t *)(file.data[i]), DATA_SECTOR_SIZE);
+  }
 
   if (verifyFile()) {
     Serial.printf("File written to storage!\r\nSize: %u\r\nSectors: %u\r\nChecksum: %u\r\n", dataSize, sectorCount, calc_checksum);
@@ -223,8 +233,7 @@ byte verifyFile() {
   if (file.header.head != DATA_HEAD
       && file.header.dataSize > maxDataSize) {
     return FILE_CORRUPT;
-  }
-  else if (file.header.nextSector > file.header.sectorCount) {
+  } else if (file.header.nextSector > file.header.sectorCount) {
 
     // MISSING MASK VALIDATION
 
@@ -280,4 +289,22 @@ void readWriteTest() {
     delay(1);
   }
   Serial.printf("Test progress: %5.2f%% , successCount: %ld , failCount:%ld \n", progress, successCount, failCount);
+}
+
+void readEntireChip() {
+  char readBuf[32] = { 0 };
+  uint32_t productSize = MB85RC.getDeviceCapacity();
+  Serial.println();
+  for (uint32_t i = 0; i < productSize; i += sizeof(readBuf)) {
+    MB85RC.read(i, (uint8_t *)readBuf, sizeof(readBuf));
+    Serial.print("0x");
+    Serial.print(i, HEX);
+    Serial.print("\t");
+    for (uint32_t j = 0; j < sizeof(readBuf); j++) {
+      Serial.print("0x");
+      Serial.print(readBuf[j], HEX);
+      Serial.print(' ');
+    }
+    Serial.println();
+  }
 }

@@ -35,7 +35,7 @@ struct FileStructure {
 
 byte verifyFile();
 void writeHeader();
-bool writeFileSender(byte *data, uint16_t dataSize);
+bool writeWholeFile(byte *data, uint16_t dataSize);
 bool setupStorage();
 bool readFile();
 bool writeDefaultFile();
@@ -43,5 +43,6 @@ void readWriteTest();
 void printHeader(FileHeader header);
 bool writeSector(byte *data, uint16_t dataSize, byte sector);
 void initFileReceiver(uint32_t checksum, byte sectorCount, uint16_t dataSize);
+void readEntireChip();
 
 #endif

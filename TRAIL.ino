@@ -3,6 +3,7 @@
 #include "lora.h"
 #include "data_transfer.h"
 #include "conf.h"
+#include "send_mqtt.h"
 
 extern FileStructure file;
 bool filePresent = false;
@@ -47,15 +48,16 @@ void setup() {
   initTransferLogic();
   delay(500);
   setupRF();
+  mqttSetup();
 
 
-  Serial.println("test");
+  Serial.println("Setup done");
 
   // MISSING RESTORE STATE
 
 
 
-  delay(5000);
+  delay(2000);
 }
 
 void loop() {
@@ -76,7 +78,7 @@ void loop() {
         break;
       case 't':
         {
-          // readWriteTest();
+          sendFileMqtt(file);
           break;
         }
       case 'f':
@@ -85,7 +87,7 @@ void loop() {
           break;
         }
       case 'l':
-
+        readEntireChip();
         break;
       case 'v':
         verifyFile();
@@ -101,4 +103,5 @@ void loop() {
   }
 
   dataTransferStateLogic();
+  mqttKeepAlive();
 }
