@@ -1,8 +1,9 @@
 #include "lora.h"
 #include "data_transfer.h"
+#include "send_mqtt.h"
 
 extern FileStructure file;
-extern const uint32_t maxDataSize;
+const uint32_t maxDataSize = sizeof(FileStructure) - sizeof(FileHeader);
 volatile bool txReady = false;
 volatile bool rxReady = false;
 extern byte transferState;
@@ -31,7 +32,7 @@ void onRx(uint8_t* payload, uint16_t size, int16_t rssi, int8_t snr) {
   TX_HEADER baseHeader;
   memcpy(&baseHeader, payload, sizeof(TX_HEADER));
 
-  Serial.print("PACKET: ");
+  Serial.printf("RX PACKET  (%d,%d):\r\n",rssi,snr);
   for (int i = 0; i < size; i++) {
     Serial.printf("%x ", payload[i]);
   }
@@ -47,6 +48,8 @@ void onRx(uint8_t* payload, uint16_t size, int16_t rssi, int8_t snr) {
       transferState = TRANSFER_REQUESTED_HANDSHAKE;
       break;
     case OPCODE_HANDSHAKE_RESP:
+      Serial.println("TX RESPONSE");
+      onTransferResponse(payload, size);
       transferState = TRANSFER_REQUEST_DATA;
       break;
     case OPCODE_DATAGRAM_REQ:
@@ -54,7 +57,6 @@ void onRx(uint8_t* payload, uint16_t size, int16_t rssi, int8_t snr) {
       transferState = TRANSFER_SENDING_DATA;
       break;
     case OPCODE_DATAGRAM_RESP:
-      transferState = TRANSFER_WAIT;
       if (receiveDatagram(payload, size)) {
       }
       transferState = TRANSFER_WAIT;
@@ -88,18 +90,14 @@ void dataTransferStateLogic() {
 
     // Get next datagram
     case TRANSFER_REQUEST_DATA:
-
-      static byte status = verifyFile();
-
-      if (status == ITERATING_SECTORS) {
+      if (verifyFile() == ITERATING_SECTORS) {
         Serial.printf("==================\r\nGet datagram %u\r\n", file.header.nextSector);
         delay(500);
 
         getDatagram(file.header.nextSector, txRecipient);
         transferState = TRANSFER_LISTEN;
       } else {
-        Serial.printf("\r\n+++++++++++++++\r\nTx complete!!!!\r\n+++++++++++++++\r\n");
-        transferState = TRANSFER_IDLE;
+        transferState = TRANSFER_COMPLETE;
       }
       break;
     case TRANSFER_SENDING_DATA:
@@ -143,14 +141,7 @@ void onTimeout() {
 ///
 void TxDone() {
 
-  // #ifdef SERVER
-  // TRANSFER_LISTEN;
-  // #else
   transferState = TRANSFER_LISTEN;
-#ifndef SERVER
-  transferState = TRANSFER_REQUEST_DATA;
-#endif
-  // #endif
 }
 
 ///
@@ -159,11 +150,6 @@ void TxDone() {
 void initTransferLogic() {
 
   setupRx(&callbackHandler);
-
-  byte fileState = verifyFile();
-  // if (fileState == ITERATING_SECTORS) {
-  //   transferState = TRANSFER_REQUEST_DATA;
-  // }
   Serial.println("Transfer logic setup");
   return;
 }
@@ -182,6 +168,7 @@ void requestTransfer(byte recipient) {
 
   // Send LORA
   send(dataBuffer, sizeof(header));
+  transferState = TRANSFER_IDLE;
   return;
 }
 
@@ -231,7 +218,7 @@ bool onDatagramRequest(byte* rcvBuf, byte rcvBufSize) {
 
   // Validate header
   if (header.sector > file.header.sectorCount || header.checksum != file.header.checksum) {
-  // if (header.sector > file.header.sectorCount) {
+    // if (header.sector > file.header.sectorCount) {
     return false;
   }
 

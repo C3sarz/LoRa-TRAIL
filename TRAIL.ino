@@ -49,6 +49,7 @@ void setup() {
   delay(500);
   setupRF();
   mqttSetup();
+  transferState = TRANSFER_IDLE;
 
 
   Serial.println("Setup done");
@@ -69,9 +70,8 @@ void loop() {
     Serial.printf("Rcvd: %c\r\n", rcvd);
     switch (rcvd) {
       case 's':
-#ifndef SERVER
         requestTransfer(0x06);
-#endif
+
         break;
       case 'd':
         printHeader(file.header);

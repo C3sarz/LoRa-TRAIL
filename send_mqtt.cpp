@@ -15,7 +15,8 @@ MqttClient mqttClient(client);
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };  // Set the MAC address, do not repeat in a network.
 
 int port = 61612;
-const char topic[] = "server/file";
+const char sendTopic[] = "server/file";
+const char rcvTopic[] = "client/file";
 
 void mqttSetup() {
   pinMode(WB_IO2, OUTPUT);
@@ -46,7 +47,7 @@ void mqttSetup() {
       delay(1);
     }
   }
-  while (Ethernet.linkStatus() == LinkOFF) {
+  if (Ethernet.linkStatus() == LinkOFF) {
     Serial.println("Ethernet cable is not connected.");
     delay(500);
   }
@@ -55,7 +56,7 @@ void mqttSetup() {
 
   mqttClient.setId("SENDER");
   mqttClient.setUsernamePassword(USER_NAME, PASSWORD);
-
+  mqttClient.onMessage(onMqttMessage);
   Serial.print("Attempting to connect to the MQTT broker...");
 
   if (!mqttClient.connect(server, SERVER_PORT)) {
@@ -67,26 +68,28 @@ void mqttSetup() {
     //   delay(1);
     // }
   }
+  else{
 
+  mqttClient.subscribe(rcvTopic);
   Serial.println("Connected to the MQTT broker!");
   Serial.println();
+  }
 }
 
 void mqttKeepAlive() {
   mqttClient.poll();
 }
 
+void onMqttMessage(int messageSize) {
+}
 
 void sendFileMqtt(FileStructure file) {
-
-
-
   for (uint i = 0; i < file.header.sectorCount; i++) {
 
     // double dataSize_D = static_cast<double>(file.header.dataSize);
     // uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D - dataSize_D * (i / (double)file.header.sectorCount));
-    mqttClient.beginMessage(topic);
-    Serial.printf("Sending data to server. DataLen: %u\r\n",file.header.dataSize - i*DATA_SECTOR_SIZE);
+    mqttClient.beginMessage(sendTopic);
+    Serial.printf("Sending data to server. DataLen: %u\r\n", file.header.dataSize - i * DATA_SECTOR_SIZE);
     mqttClient.write((uint8_t*)(file.data[i]), DATA_SECTOR_SIZE);
     mqttClient.endMessage();
   }

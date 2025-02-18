@@ -1,4 +1,3 @@
-#include <sys/_stdint.h>
 #include "storage_manager.h"
 #include "RAK1500x_MB85RC.h"
 #include <Arduino_CRC32.h>
@@ -107,6 +106,18 @@ bool writeDefaultFile() {
   return result;
 }
 
+///
+///
+///
+void clearStorage() {
+
+  // FileHeader header;
+
+  // header.
+
+  // return result;
+}
+
 void initFileReceiver(uint32_t checksum, byte sectorCount, uint16_t dataSize) {
   // Sanity checks
   if (dataSize > maxDataSize) {
@@ -162,8 +173,9 @@ bool writeSector(byte *data, uint16_t dataSize, byte sector) {
   memcpy(file.data[sector], data, dataSize);
 
   // Write to chip
-  MB85RC.write(sizeof(file.header) + sector * DATA_SECTOR_SIZE, (uint8_t *)file.data[sector], fileSize);
   writeHeader();
+  MB85RC.write(sizeof(file.header) + sector * DATA_SECTOR_SIZE, (uint8_t *)file.data[sector], fileSize);
+  
   Serial.printf("Sector written to storage!\r\nSize: %u\r\nSector: %u\r\nRemaining: %u bytes\r\n", dataSize, sector, remainingBytes);
   return true;
 }
@@ -189,7 +201,7 @@ bool writeWholeFile(byte *data, uint16_t dataSize) {
   file.header.pendingBytes = 0;
   file.header.head = DATA_HEAD;
   file.header.isPending = false;
-  file.header.nextSector = sectorCount;
+  file.header.nextSector = sectorCount+1;
   file.header.sectorCount = sectorCount;
 
 
@@ -205,12 +217,8 @@ bool writeWholeFile(byte *data, uint16_t dataSize) {
     MB85RC.write(offset, (uint8_t *)(file.data[i]), DATA_SECTOR_SIZE);
   }
 
-  if (verifyFile()) {
-    Serial.printf("File written to storage!\r\nSize: %u\r\nSectors: %u\r\nChecksum: %u\r\n", dataSize, sectorCount, calc_checksum);
-    return true;
-  }
-
-  return false;
+  Serial.printf("File written to storage!\r\nSize: %u\r\nSectors: %u\r\nChecksum: %u\r\n", dataSize, sectorCount, calc_checksum);
+  return true;
 }
 
 // Updates file header in FRAM
@@ -231,18 +239,18 @@ byte verifyFile() {
 
   // Verify FILE structure
   if (file.header.head != DATA_HEAD
-      && file.header.dataSize > maxDataSize) {
-    return FILE_CORRUPT;
+      || file.header.dataSize > maxDataSize) {
+    result = FILE_CORRUPT;
   } else if (file.header.nextSector > file.header.sectorCount) {
 
     // MISSING MASK VALIDATION
 
-    file.header.isPending = false;
-    writeHeader();
-  }
+    //   file.header.isPending = false;
+    //   writeHeader();
+    // }
 
-  // Get checksums
-  if (!file.header.isPending) {
+    // // Get checksums
+    // if (!file.header.isPending) {
 
     uint32_t checksum = file.header.checksum;
     calc_checksum = crc32.calc((uint8_t *)file.data, file.header.dataSize);

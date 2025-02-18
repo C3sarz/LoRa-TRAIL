@@ -3,3 +3,4 @@
 void mqttSetup();
 void sendFileMqtt(FileStructure file);
 void mqttKeepAlive();
+void onMqttMessage(int messageSize);
