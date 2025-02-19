@@ -8,6 +8,7 @@ enum TX_OPCODE {
   OPCODE_HANDSHAKE_RESP,
   OPCODE_DATAGRAM_REQ,
   OPCODE_DATAGRAM_RESP,
+  OPCODE_NETWORK_FILE_RX,
   OPCODE_HEARTBEAT,
   OPCODE_LINK,
   OPCODE_ERROR,
@@ -39,6 +40,14 @@ public:
     opcode = OPCODE_DATAGRAM_RESP;
   }
 };
+
+// class NetworkRX : public TX_HEADER {
+// public:
+//   byte sector;
+//   byte sectorCount;
+//   byte dataLen = 0;
+  
+// };
 
 class TransferStartReq : public TX_HEADER {
 public:

@@ -1,8 +1,10 @@
+#include <sys/_stdint.h>
 #include "send_mqtt.h"
 #include <SPI.h>
 #include <RAK13800_W5100S.h>    // Click to install library: http://librarymanager/All#RAKwireless_W5100S
 #include <ArduinoMqttClient.h>  // Click to install library: http://librarymanager/All#ArduinoMqttClient
 #include "storage_manager.h"
+#include "data_transfer.h"
 
 #define USER_NAME ""  // Provide a username and password for authentication.
 #define PASSWORD ""
@@ -17,6 +19,7 @@ byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };  // Set the MAC address, do
 int port = 61612;
 const char sendTopic[] = "server/file";
 const char rcvTopic[] = "client/file";
+byte mqttBuf[DATA_SECTOR_SIZE];
 
 void mqttSetup() {
   pinMode(WB_IO2, OUTPUT);
@@ -67,12 +70,11 @@ void mqttSetup() {
     // {
     //   delay(1);
     // }
-  }
-  else{
+  } else {
 
-  mqttClient.subscribe(rcvTopic);
-  Serial.println("Connected to the MQTT broker!");
-  Serial.println();
+    mqttClient.subscribe(rcvTopic);
+    Serial.println("Connected to the MQTT broker!");
+    Serial.println();
   }
 }
 
@@ -81,6 +83,36 @@ void mqttKeepAlive() {
 }
 
 void onMqttMessage(int messageSize) {
+  bool result = false;
+  TX_HEADER header;
+  mqttClient.read((uint8_t*)&header, sizeof(header));
+  if (messageSize < sizeof(TX_HEADER)) {
+    result = false;
+  }
+
+  // START
+  if (header.opcode == OPCODE_HANDSHAKE_RESP) {
+    byte sectorCount = 0;
+    uint16_t dataLen = 0;
+    uint32_t checksum = 0;
+    mqttClient.read((uint8_t*)&sectorCount, 1);
+    mqttClient.read((uint8_t*)&dataLen, 2);
+    initFileReceiver(checksum, sectorCount, dataLen);
+  }
+  // DATA
+  else if (header.opcode == OPCODE_DATAGRAM_RESP) {
+    byte sector = 0;
+    byte dataLen = 0;
+    mqttClient.read((uint8_t*)&sector, 1);
+    mqttClient.read((uint8_t*)&dataLen, 1);
+
+    if (dataLen > 0 && dataLen <= DATA_SECTOR_SIZE) {
+      mqttClient.read((uint8_t*)mqttBuf, dataLen);
+      writeSector(mqttBuf, dataLen, sector);
+      result = true;
+    }
+  }
+  Serial.printf("RX result: %u\r\n", result);
 }
 
 void sendFileMqtt(FileStructure file) {
@@ -89,13 +121,15 @@ void sendFileMqtt(FileStructure file) {
     // double dataSize_D = static_cast<double>(file.header.dataSize);
     // uint16_t remainingBytes = static_cast<uint16_t>(dataSize_D - dataSize_D * (i / (double)file.header.sectorCount));
     mqttClient.beginMessage(sendTopic);
-    Serial.printf("Sending data to server. DataLen: %u\r\n", file.header.dataSize - i * DATA_SECTOR_SIZE);
+    Serial.printf("Sending data to server. Sector %u, Datalen: %u\r\n", i, file.header.dataSize - i * DATA_SECTOR_SIZE);
     mqttClient.write((uint8_t*)(file.data[i]), DATA_SECTOR_SIZE);
     mqttClient.endMessage();
   }
 
   // mqttClient
 }
+
+
 
 // void loop()
 // {

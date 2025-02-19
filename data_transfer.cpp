@@ -177,10 +177,6 @@ void requestTransfer(byte recipient) {
 ///
 void onTransferRequest(byte recipient) {
   // Read file from FRAM
-  // readFile();
-
-  // DEBUG
-  writeDefaultFile();
   readFile();
   digitalWrite(LED_BLUE, true);
 

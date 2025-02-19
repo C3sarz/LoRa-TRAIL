@@ -1,7 +1,7 @@
 
 #ifndef CONF
 #define CONF
-// #define SERVER
+#define SERVER
 #define DEVICE_ID 0x01;
 
 enum DATA_TRANSFER_STATE{
